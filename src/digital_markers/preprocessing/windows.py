@@ -1,0 +1,1 @@
+"""Shared time-window utilities."""
