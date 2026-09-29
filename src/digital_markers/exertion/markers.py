@@ -39,7 +39,7 @@ def robust_zscore(x: pd.Series) -> pd.Series:
 
 
 def compute_motion_energy(df: pd.DataFrame) -> pd.Series:
-    """Match the legacy alevel motion energy formulation."""
+    """Compute motion energy from acceleration and rotation signals."""
     if {
         "user_acceleration_x",
         "user_acceleration_y",
@@ -134,7 +134,7 @@ def exertion_raw(
     hr_weight: float = HR_WEIGHT,
     motion_weight: float = MOTION_WEIGHT,
 ):
-    """Compute the legacy alevel window-level exertion decomposition."""
+    """Compute window-level motion and heart-rate exertion components."""
     motion = np.nan
     hr = np.nan
 

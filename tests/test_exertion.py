@@ -5,7 +5,7 @@ from digital_markers.exertion import compute_exertion_markers
 from digital_markers.exertion.markers import _smooth_signals
 
 
-def test_exertion_signals_use_legacy_time_based_median_smoothing():
+def test_exertion_signals_use_time_based_median_smoothing():
     motion_timestamps = pd.date_range("2026-01-01", periods=4, freq="1s")
     heart_rate_timestamps = pd.date_range("2026-01-01", periods=4, freq="5s")
     motion = pd.DataFrame({"timestamp": motion_timestamps, "motion_energy": [0.0, 1.0, 100.0, 1.0]})
