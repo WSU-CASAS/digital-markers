@@ -51,16 +51,16 @@ def test_exertion_markers_are_computed_from_motion_and_hr():
 
 
 def test_exertion_marker_tuning_can_be_overridden():
-    timestamps = pd.date_range("2026-01-01", periods=2, freq="30s")
+    timestamps = pd.date_range("2026-01-01", periods=21, freq="30s")
     motion = pd.DataFrame(
         {
             "timestamp": timestamps,
-            "acceleration_x": [0.1, 0.5],
-            "acceleration_y": [0.0, 0.2],
-            "acceleration_z": [0.0, 0.1],
+            "acceleration_x": [0.1 + index * 0.02 for index in range(21)],
+            "acceleration_y": [0.0] * 21,
+            "acceleration_z": [0.0] * 21,
         }
     )
-    heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": [60.0, 80.0]})
+    heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": list(range(60, 101, 2))})
     data = ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
 
     result = compute_exertion_markers(
@@ -134,6 +134,52 @@ def test_exertion_reports_missing_required_canonical_columns():
         assert "motion data is missing required columns: acceleration_y, acceleration_z" in str(exc)
     else:
         raise AssertionError("Expected missing motion columns to raise ValueError")
+
+
+def test_exertion_runs_without_heart_rate_and_returns_none_for_hr_markers():
+    timestamps = pd.date_range("2026-01-01", periods=4, freq="30s")
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1, 0.3, 0.6, 0.9],
+            "acceleration_y": [0.0, 0.1, 0.2, 0.3],
+            "acceleration_z": [0.0, 0.0, 0.1, 0.2],
+        }
+    )
+
+    result = compute_exertion_markers(ParticipantData(participant_id="P001", motion=motion))
+
+    assert result.markers["mean_daily_exertion"].iloc[0] > 0
+    assert result.markers["heart_rate_peak"].iloc[0] is None
+    assert result.markers["mean_hr_motion_corr"].iloc[0] is None
+    assert result.markers["mean_hr_motion_gain"].iloc[0] is None
+    assert result.markers["mean_hr_residual_mean"].iloc[0] is None
+    assert result.daily["heart_rate_peak"].map(lambda value: value is None).all()
+    assert result.details["windowed_exertion"]["hr_motion_exertion"].map(lambda value: value is None).all()
+    assert result.details["windowed_exertion"]["hr_component"].map(lambda value: value is None).all()
+
+
+def test_exertion_returns_none_for_hr_markers_below_sample_threshold():
+    timestamps = pd.date_range("2026-01-01", periods=20, freq="30s")
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1 + index * 0.02 for index in range(20)],
+            "acceleration_y": [0.0] * 20,
+            "acceleration_z": [0.0] * 20,
+        }
+    )
+    heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": list(range(60, 100, 2))})
+
+    result = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
+    )
+
+    assert result.markers["mean_daily_exertion"].iloc[0] > 0
+    assert result.markers["heart_rate_peak"].iloc[0] is None
+    assert result.daily["heart_rate_peak"].map(lambda value: value is None).all()
+    assert result.details["windowed_exertion"]["hr_motion_exertion"].map(lambda value: value is None).all()
+    assert result.details["windowed_exertion"]["hr_component"].map(lambda value: value is None).all()
 
 
 def test_exertion_rejects_unprepared_timestamp_strings():
