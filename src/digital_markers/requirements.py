@@ -4,3 +4,5 @@ from dataclasses import dataclass
 class MarkerRequirements:
     required: tuple[str, ...] = ()
     optional: tuple[str, ...] = ()
+    required_columns: tuple[str, ...] = ()
+    optional_columns: tuple[str, ...] = ()

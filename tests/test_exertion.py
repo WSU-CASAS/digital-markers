@@ -1,8 +1,17 @@
 import pandas as pd
 
 from digital_markers import ParticipantData
+from digital_markers.data.validation import canonicalize_columns
 from digital_markers.exertion import compute_exertion_markers
 from digital_markers.exertion.markers import _smooth_signals
+
+
+def test_rotation_columns_use_rotation_rate_canonical_names():
+    motion = pd.DataFrame({"Rotation X": [0.1], "Gyro Y": [0.2], "rotation_z": [0.3]})
+
+    canonical = canonicalize_columns(motion)
+
+    assert list(canonical.columns) == ["rotation_rate_x", "rotation_rate_y", "rotation_rate_z"]
 
 
 def test_exertion_signals_use_time_based_median_smoothing():
@@ -21,9 +30,9 @@ def test_exertion_markers_are_computed_from_motion_and_hr():
     motion = pd.DataFrame(
         {
             "timestamp": pd.date_range("2026-01-01 00:00:00", periods=6, freq="30s"),
-            "x": [0.1, 0.2, 0.5, 1.0, 0.8, 0.3],
-            "y": [0.0, 0.1, 0.3, 0.4, 0.5, 0.2],
-            "z": [0.0, 0.0, 0.1, 0.3, 0.2, 0.1],
+            "acceleration_x": [0.1, 0.2, 0.5, 1.0, 0.8, 0.3],
+            "acceleration_y": [0.0, 0.1, 0.3, 0.4, 0.5, 0.2],
+            "acceleration_z": [0.0, 0.0, 0.1, 0.3, 0.2, 0.1],
         }
     )
     heart_rate = pd.DataFrame(
@@ -43,7 +52,14 @@ def test_exertion_markers_are_computed_from_motion_and_hr():
 
 def test_exertion_marker_tuning_can_be_overridden():
     timestamps = pd.date_range("2026-01-01", periods=2, freq="30s")
-    motion = pd.DataFrame({"timestamp": timestamps, "x": [0.1, 0.5], "y": [0.0, 0.2], "z": [0.0, 0.1]})
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1, 0.5],
+            "acceleration_y": [0.0, 0.2],
+            "acceleration_z": [0.0, 0.1],
+        }
+    )
     heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": [60.0, 80.0]})
     data = ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
 
@@ -66,3 +82,77 @@ def test_exertion_marker_tuning_can_be_overridden():
     windowed = result.details["windowed_exertion"]
     assert windowed["exertion"].iloc[0] == windowed["hr_component"].iloc[0]
     assert result.daily["wear_time"].iloc[0] == len(windowed) * 45
+
+
+def test_exertion_canonicalizes_required_columns_and_ignores_extras():
+    timestamps = pd.date_range("2026-01-01", periods=3, freq="30s")
+    motion = pd.DataFrame(
+        {
+            "Timestamp": timestamps,
+            "User Acceleration X": [0.1, 0.5, 0.8],
+            "Acceleration Y": [0.0, 0.2, 0.3],
+            "Acceleration Z": [0.0, 0.1, 0.2],
+            "Rotation X": [100.0, -100.0, 50.0],
+            "Rotation Y": [-100.0, 100.0, -50.0],
+            "Rotation Z": [50.0, -50.0, 100.0],
+            "Yaw": [10.0, 20.0, 30.0],
+        }
+    )
+    heart_rate = pd.DataFrame({"Time Stamp": timestamps, "HR": [60.0, 75.0, 90.0]})
+    motion = canonicalize_columns(motion)
+    heart_rate = canonicalize_columns(heart_rate)
+    result = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
+    )
+
+    expected_motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1, 0.5, 0.8],
+            "acceleration_y": [0.0, 0.2, 0.3],
+            "acceleration_z": [0.0, 0.1, 0.2],
+        }
+    )
+    expected_heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": [60.0, 75.0, 90.0]})
+    expected = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=expected_motion, heart_rate=expected_heart_rate)
+    )
+
+    pd.testing.assert_frame_equal(result.details["windowed_exertion"], expected.details["windowed_exertion"])
+
+
+def test_exertion_reports_missing_required_canonical_columns():
+    timestamps = pd.date_range("2026-01-01", periods=2, freq="30s")
+    motion = pd.DataFrame({"timestamp": timestamps, "acceleration_x": [0.1, 0.5]})
+    heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": [60.0, 75.0]})
+
+    try:
+        compute_exertion_markers(
+            ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
+        )
+    except ValueError as exc:
+        assert "motion data is missing required columns: acceleration_y, acceleration_z" in str(exc)
+    else:
+        raise AssertionError("Expected missing motion columns to raise ValueError")
+
+
+def test_exertion_rejects_unprepared_timestamp_strings():
+    timestamps = ["2026-01-01 00:00:00", "2026-01-01 00:00:30"]
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1, 0.5],
+            "acceleration_y": [0.0, 0.2],
+            "acceleration_z": [0.0, 0.1],
+        }
+    )
+    heart_rate = pd.DataFrame({"timestamp": pd.to_datetime(timestamps), "heart_rate": [60.0, 75.0]})
+
+    try:
+        compute_exertion_markers(
+            ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
+        )
+    except ValueError as exc:
+        assert "motion.timestamp must have a datetime dtype" in str(exc)
+    else:
+        raise AssertionError("Expected string timestamps to be rejected")

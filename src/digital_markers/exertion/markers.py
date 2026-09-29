@@ -3,10 +3,25 @@ import pandas as pd
 
 from digital_markers.context import MarkerContext
 from digital_markers.data.participant import ParticipantData
+from digital_markers.data.validation import require_marker_columns
 from digital_markers.requirements import MarkerRequirements
 from digital_markers.results import MarkerResult
 
-REQUIREMENTS = MarkerRequirements(required=("motion", "heart_rate"), optional=("demographics.age",))
+MOTION_REQUIRED_COLUMNS = ("timestamp", "acceleration_x", "acceleration_y", "acceleration_z")
+HEART_RATE_REQUIRED_COLUMNS = ("timestamp", "heart_rate")
+
+REQUIREMENTS = MarkerRequirements(
+    required=("motion", "heart_rate"),
+    optional=("demographics.age",),
+    required_columns=(
+        "motion.timestamp",
+        "motion.acceleration_x",
+        "motion.acceleration_y",
+        "motion.acceleration_z",
+        "heart_rate.timestamp",
+        "heart_rate.heart_rate",
+    ),
+)
 
 WINDOW_SECONDS = 30
 HR_WEIGHT = 0.3
@@ -22,13 +37,8 @@ MOTION_SMOOTH_SECONDS = 5
 HR_SMOOTH_SECONDS = 15
 
 
-def _coerce_timestamp_series(values: pd.Series) -> pd.Series:
-    return pd.to_datetime(values, errors="coerce")
-
-
 def robust_zscore(x: pd.Series) -> pd.Series:
     """Robust z-score using median absolute deviation."""
-    x = pd.Series(x, dtype=float)
     med = x.median(skipna=True)
     mad = np.nanmedian(np.abs(x - med))
 
@@ -39,31 +49,12 @@ def robust_zscore(x: pd.Series) -> pd.Series:
 
 
 def compute_motion_energy(df: pd.DataFrame) -> pd.Series:
-    """Compute motion energy from acceleration and rotation signals."""
-    if {
-        "user_acceleration_x",
-        "user_acceleration_y",
-        "user_acceleration_z",
-        "rotation_rate_x",
-        "rotation_rate_y",
-        "rotation_rate_z",
-    }.issubset(df.columns):
-        acc = np.sqrt(
-            df["user_acceleration_x"] ** 2
-            + df["user_acceleration_y"] ** 2
-            + df["user_acceleration_z"] ** 2
-        )
-        rot = np.sqrt(
-            df["rotation_rate_x"] ** 2
-            + df["rotation_rate_y"] ** 2
-            + df["rotation_rate_z"] ** 2
-        )
-        return acc + 0.5 * rot
-
-    x = pd.to_numeric(df.get("x", 0), errors="coerce")
-    y = pd.to_numeric(df.get("y", 0), errors="coerce")
-    z = pd.to_numeric(df.get("z", 0), errors="coerce")
-    return np.sqrt(x**2 + y**2 + z**2)
+    """Compute acceleration magnitude from canonical axis columns."""
+    return np.sqrt(
+        df["acceleration_x"] ** 2
+        + df["acceleration_y"] ** 2
+        + df["acceleration_z"] ** 2
+    )
 
 
 def clean_heart_rate(
@@ -78,7 +69,7 @@ def clean_heart_rate(
         return df
 
     cleaned = df.copy()
-    hr = pd.to_numeric(cleaned["heart_rate"], errors="coerce")
+    hr = cleaned["heart_rate"].copy()
     hr[(hr < min_hr) | (hr > max_hr)] = np.nan
     z = robust_zscore(hr)
     hr[np.abs(z) > robust_z_max] = np.nan
@@ -109,7 +100,7 @@ def _smooth_signals(
 
 
 def _summarize_daily_values(day_values: pd.Series) -> dict[str, float | int | None]:
-    clean = pd.to_numeric(day_values, errors="coerce").dropna()
+    clean = day_values.dropna()
     if clean.empty:
         return {"mean": np.nan, "std": np.nan, "ac1": np.nan, "slope": np.nan}
 
@@ -139,25 +130,11 @@ def exertion_raw(
     hr = np.nan
 
     if "motion_energy" in window.columns:
-        motion_series = pd.to_numeric(window["motion_energy"], errors="coerce").dropna()
+        motion_series = window["motion_energy"].dropna()
         if len(motion_series) >= min_motion_samples_per_window:
             raw_motion = motion_series.mean()
             if np.isfinite(raw_motion):
                 motion = np.tanh(raw_motion)
-    else:
-        motion_cols = {
-            "user_acceleration_x",
-            "user_acceleration_y",
-            "user_acceleration_z",
-            "rotation_rate_x",
-            "rotation_rate_y",
-            "rotation_rate_z",
-        }
-        if motion_cols.issubset(window.columns):
-            raw_motion = compute_motion_energy(window).mean()
-            if np.isfinite(raw_motion):
-                motion = np.tanh(raw_motion)
-
     if (
         "heart_rate" in window.columns
         and window["heart_rate"].notna().any()
@@ -165,7 +142,7 @@ def exertion_raw(
         and hr_std is not None
         and hr_std > 0
     ):
-        hr_series = pd.to_numeric(window["heart_rate"], errors="coerce").dropna()
+        hr_series = window["heart_rate"].dropna()
         if len(hr_series) >= min_hr_samples_per_window:
             raw_hr = hr_series.mean()
             z = (raw_hr - hr_mean) / hr_std
@@ -205,14 +182,22 @@ def compute_exertion_markers(
 
     motion = data.motion.copy()
     heart_rate = data.heart_rate.copy()
+    frames = {"motion": motion, "heart_rate": heart_rate}
+    require_marker_columns(frames, REQUIREMENTS.required_columns)
 
-    if "timestamp" not in motion.columns:
-        raise ValueError("motion data must include a 'timestamp' column")
-    if "timestamp" not in heart_rate.columns:
-        raise ValueError("heart_rate data must include a 'timestamp' column")
+    for name, frame in frames.items():
+        if not pd.api.types.is_datetime64_any_dtype(frame["timestamp"]):
+            raise ValueError(f"{name}.timestamp must have a datetime dtype before calling the exertion marker")
 
-    motion["timestamp"] = _coerce_timestamp_series(motion["timestamp"])
-    heart_rate["timestamp"] = _coerce_timestamp_series(heart_rate["timestamp"])
+    for name in ("acceleration_x", "acceleration_y", "acceleration_z"):
+        if not pd.api.types.is_numeric_dtype(motion[name]):
+            raise ValueError(f"motion.{name} must have a numeric dtype before calling the exertion marker")
+    if not pd.api.types.is_numeric_dtype(heart_rate["heart_rate"]):
+        raise ValueError("heart_rate.heart_rate must have a numeric dtype before calling the exertion marker")
+
+    motion = motion.loc[:, MOTION_REQUIRED_COLUMNS].copy()
+    heart_rate = heart_rate.loc[:, HEART_RATE_REQUIRED_COLUMNS].copy()
+
     motion = motion.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     heart_rate = heart_rate.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
@@ -233,8 +218,8 @@ def compute_exertion_markers(
         motion_smooth_seconds=motion_smooth_seconds,
         hr_smooth_seconds=hr_smooth_seconds,
     )
-    hr_mean = float(pd.to_numeric(heart_rate["heart_rate"], errors="coerce").mean())
-    hr_std = float(pd.to_numeric(heart_rate["heart_rate"], errors="coerce").std(ddof=0))
+    hr_mean = float(heart_rate["heart_rate"].mean())
+    hr_std = float(heart_rate["heart_rate"].std(ddof=0))
 
     merged = motion[["timestamp", "motion_energy"]].merge(
         heart_rate[["timestamp", "heart_rate"]], how="left", on="timestamp"
@@ -274,18 +259,18 @@ def compute_exertion_markers(
         .dropna(how="all")
     )
 
-    daily = windowed.groupby(windowed.index.date).agg(
+    daily = windowed.groupby(windowed.index.normalize()).agg(
         exertion=("exertion", "mean"),
         wear_time=("motion_component", lambda s: int(len(s) * window_seconds)),
-        heart_rate_peak=("hr_component", lambda s: float(pd.to_numeric(s, errors="coerce").max()) if s.notna().any() else np.nan),
-    ).reset_index()
-    daily = daily.rename(columns={"index": "date"})
-    daily["date"] = pd.to_datetime(daily["date"])
+        heart_rate_peak=("hr_component", lambda s: float(s.max()) if s.notna().any() else np.nan),
+    )
+    daily.index.name = "date"
+    daily = daily.reset_index()
     daily = daily.sort_values("date").reset_index(drop=True)
 
-    daily_summary = _summarize_daily_values(pd.to_numeric(daily["exertion"], errors="coerce"))
+    daily_summary = _summarize_daily_values(daily["exertion"])
     hourly = windowed["exertion"].resample("h").mean() if not windowed.empty else pd.Series(dtype=float)
-    hourly_summary = _summarize_daily_values(pd.to_numeric(hourly, errors="coerce")) if not hourly.empty else {"mean": np.nan, "std": np.nan, "ac1": np.nan, "slope": np.nan}
+    hourly_summary = _summarize_daily_values(hourly) if not hourly.empty else {"mean": np.nan, "std": np.nan, "ac1": np.nan, "slope": np.nan}
 
     summary = {
         "num_valid_days": int(daily["exertion"].notna().sum()),
@@ -301,7 +286,7 @@ def compute_exertion_markers(
         "mean_hr_motion_gain": np.nan,
         "mean_hr_residual_mean": np.nan,
         "mean_wear_time": float(daily["wear_time"].mean()) if not daily.empty else np.nan,
-        "heart_rate_peak": float(pd.to_numeric(daily["heart_rate_peak"], errors="coerce").max()) if daily["heart_rate_peak"].notna().any() else np.nan,
+        "heart_rate_peak": float(daily["heart_rate_peak"].max()) if daily["heart_rate_peak"].notna().any() else np.nan,
     }
 
     markers = pd.DataFrame([summary])
