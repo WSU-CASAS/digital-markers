@@ -197,7 +197,7 @@ def compute_exertion_markers(
     motion_smooth_seconds: int = MOTION_SMOOTH_SECONDS,
     hr_smooth_seconds: int = HR_SMOOTH_SECONDS,
 ) -> MarkerResult:
-    """Compute exertion markers using the legacy alevel formulation."""
+    """Compute exertion markers."""
     required = {"motion": data.motion, "heart_rate": data.heart_rate}
     missing = [name for name, value in required.items() if value is None or value.empty]
     if missing:
