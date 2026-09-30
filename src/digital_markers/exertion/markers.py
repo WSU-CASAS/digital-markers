@@ -7,9 +7,6 @@ from digital_markers.data.validation import require_marker_columns
 from digital_markers.requirements import MarkerRequirements
 from digital_markers.results import MarkerResult
 
-MOTION_REQUIRED_COLUMNS = ("timestamp", "acceleration_x", "acceleration_y", "acceleration_z")
-HEART_RATE_REQUIRED_COLUMNS = ("timestamp", "heart_rate")
-
 REQUIREMENTS = MarkerRequirements(
     required=("motion",),
     optional=("heart_rate",),
@@ -18,9 +15,19 @@ REQUIREMENTS = MarkerRequirements(
         "motion.acceleration_x",
         "motion.acceleration_y",
         "motion.acceleration_z",
+        "heart_rate.timestamp",
+        "heart_rate.heart_rate",
     ),
-    optional_columns=("heart_rate.timestamp", "heart_rate.heart_rate"),
 )
+
+
+def _columns_for_stream(stream: str, requirements: tuple[str, ...]) -> tuple[str, ...]:
+    prefix = f"{stream}."
+    return tuple(path.removeprefix(prefix) for path in requirements if path.startswith(prefix))
+
+
+MOTION_REQUIRED_COLUMNS = _columns_for_stream("motion", REQUIREMENTS.required_columns)
+HEART_RATE_REQUIRED_COLUMNS = _columns_for_stream("heart_rate", REQUIREMENTS.required_columns)
 
 WINDOW_SECONDS = 30
 HR_WEIGHT = 0.3
@@ -190,9 +197,11 @@ def compute_exertion_markers(
     frames = {"motion": motion}
     if heart_rate is not None:
         frames["heart_rate"] = heart_rate
-    require_marker_columns(frames, REQUIREMENTS.required_columns)
-    if heart_rate is not None:
-        require_marker_columns(frames, REQUIREMENTS.optional_columns)
+    require_marker_columns(
+        frames,
+        REQUIREMENTS.required_columns,
+        optional_streams=REQUIREMENTS.optional,
+    )
 
     for name, frame in frames.items():
         if not pd.api.types.is_datetime64_any_dtype(frame["timestamp"]):

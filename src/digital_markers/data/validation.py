@@ -71,14 +71,18 @@ def require_columns(df: pd.DataFrame, required: set[str], name: str) -> None:
 def require_marker_columns(
     frames: Mapping[str, pd.DataFrame],
     required_columns: tuple[str, ...],
+    *,
+    optional_streams: tuple[str, ...] = (),
 ) -> None:
-    """Validate requirements written as ``stream.column`` paths."""
+    """Validate required columns, skipping absent optional streams."""
     missing_by_stream: dict[str, set[str]] = {}
     for requirement in required_columns:
         stream, separator, column = requirement.partition(".")
         if not separator or not stream or not column:
             raise ValueError(f"Invalid marker column requirement: {requirement!r}")
         frame = frames.get(stream)
+        if frame is None and stream in optional_streams:
+            continue
         if frame is None or column not in frame.columns:
             missing_by_stream.setdefault(stream, set()).add(column)
 

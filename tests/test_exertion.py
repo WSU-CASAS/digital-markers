@@ -182,6 +182,28 @@ def test_exertion_returns_none_for_hr_markers_below_sample_threshold():
     assert result.details["windowed_exertion"]["hr_component"].map(lambda value: value is None).all()
 
 
+def test_optional_heart_rate_stream_still_requires_its_required_columns():
+    timestamps = pd.date_range("2026-01-01", periods=2, freq="30s")
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1, 0.5],
+            "acceleration_y": [0.0, 0.2],
+            "acceleration_z": [0.0, 0.1],
+        }
+    )
+    heart_rate = pd.DataFrame({"timestamp": timestamps})
+
+    try:
+        compute_exertion_markers(
+            ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
+        )
+    except ValueError as exc:
+        assert "heart_rate data is missing required columns: heart_rate" in str(exc)
+    else:
+        raise AssertionError("Expected supplied heart-rate data to require a heart_rate column")
+
+
 def test_exertion_rejects_unprepared_timestamp_strings():
     timestamps = ["2026-01-01 00:00:00", "2026-01-01 00:00:30"]
     motion = pd.DataFrame(
