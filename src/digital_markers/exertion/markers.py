@@ -4,6 +4,7 @@ import pandas as pd
 from digital_markers.context import MarkerContext
 from digital_markers.data.participant import ParticipantData
 from digital_markers.data.validation import require_marker_columns
+from digital_markers.preprocessing.wear import detect_nonwear
 from digital_markers.requirements import MarkerRequirements
 from digital_markers.results import MarkerResult
 
@@ -15,6 +16,9 @@ REQUIREMENTS = MarkerRequirements(
         "motion.acceleration_x",
         "motion.acceleration_y",
         "motion.acceleration_z",
+        "motion.rotation_rate_x",
+        "motion.rotation_rate_y",
+        "motion.rotation_rate_z",
         "heart_rate.timestamp",
         "heart_rate.heart_rate",
     ),
@@ -236,10 +240,14 @@ def compute_exertion_markers(
     for name in ("acceleration_x", "acceleration_y", "acceleration_z"):
         if not pd.api.types.is_numeric_dtype(motion[name]):
             raise ValueError(f"motion.{name} must have a numeric dtype before calling the exertion marker")
+    for name in ("rotation_rate_x", "rotation_rate_y", "rotation_rate_z"):
+        if not pd.api.types.is_numeric_dtype(motion[name]):
+            raise ValueError(f"motion.{name} must have a numeric dtype before calling the exertion marker")
     if heart_rate is not None and not pd.api.types.is_numeric_dtype(heart_rate["heart_rate"]):
         raise ValueError("heart_rate.heart_rate must have a numeric dtype before calling the exertion marker")
 
-    motion = motion.loc[:, MOTION_REQUIRED_COLUMNS].copy()
+    worn = detect_nonwear(motion, rate=10, window_minutes=1)
+    motion = motion.loc[worn.to_numpy(), MOTION_REQUIRED_COLUMNS].copy()
     if heart_rate is not None:
         heart_rate = heart_rate.loc[:, HEART_RATE_REQUIRED_COLUMNS].copy()
 

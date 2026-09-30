@@ -13,6 +13,14 @@ DAILY_FIELDS = (
 )
 
 
+def _with_rotation_columns(motion: pd.DataFrame) -> pd.DataFrame:
+    motion = motion.copy()
+    sample_pattern = np.resize([0.0, 0.1], len(motion))
+    for axis, scale in zip(("x", "y", "z"), (1.0, 2.0, 3.0)):
+        motion[f"rotation_rate_{axis}"] = sample_pattern * scale
+    return motion
+
+
 def test_rotation_columns_use_rotation_rate_canonical_names():
     motion = pd.DataFrame({"Rotation X": [0.1], "Gyro Y": [0.2], "rotation_z": [0.3]})
 
@@ -42,6 +50,7 @@ def test_exertion_markers_are_computed_from_motion_and_hr():
             "acceleration_z": [0.0, 0.0, 0.1, 0.3, 0.2, 0.1],
         }
     )
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame(
         {
             "timestamp": pd.date_range("2026-01-01 00:00:00", periods=6, freq="30s"),
@@ -70,6 +79,7 @@ def test_exertion_uses_hr_readings_within_motion_windows():
         "acceleration_y": [0.0] * 21,
         "acceleration_z": [0.0] * 21,
     })
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({
         "timestamp": timestamps + pd.Timedelta(seconds=5),
         "heart_rate": list(range(60, 81)),
@@ -85,6 +95,32 @@ def test_exertion_uses_hr_readings_within_motion_windows():
     assert result.daily["daily_hr_motion_exertion"].notna().all()
 
 
+def test_exertion_excludes_detected_nonwear_time():
+    count = 1200
+    timestamps = pd.date_range("2026-01-01", periods=count, freq="100ms")
+    active_acceleration = np.tile([0.0, 0.1], 300)
+    active_rotation = np.tile([0.0, 0.2], 300)
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": np.r_[active_acceleration, np.zeros(600)],
+            "acceleration_y": np.zeros(count),
+            "acceleration_z": np.zeros(count),
+            "rotation_rate_x": np.r_[active_rotation, np.zeros(600)],
+            "rotation_rate_y": np.zeros(count),
+            "rotation_rate_z": np.zeros(count),
+        }
+    )
+
+    result = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=motion),
+        use_short_smoothing=False,
+    )
+
+    assert result.daily["motion_wear_time"].iloc[0] == 60
+    assert result.details["windowed_exertion"]["motion_exertion"].notna().sum() == 2
+
+
 def test_exertion_daily_and_summary_statistics_follow_reference_formulas():
     timestamps = pd.DatetimeIndex([
         timestamp
@@ -97,6 +133,7 @@ def test_exertion_daily_and_summary_statistics_follow_reference_formulas():
         "acceleration_y": [0.0] * 63,
         "acceleration_z": [0.0] * 63,
     })
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({
         "timestamp": timestamps + pd.Timedelta(seconds=5),
         "heart_rate": [60.0 + index % 21 + 2 * (index // 21) for index in range(63)],
@@ -144,6 +181,7 @@ def test_exertion_keeps_motion_day_when_hr_is_missing_that_day():
         "acceleration_y": [0.0] * 42,
         "acceleration_z": [0.0] * 42,
     })
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({
         "timestamp": timestamps[:21] + pd.Timedelta(seconds=5),
         "heart_rate": list(range(60, 81)),
@@ -169,6 +207,7 @@ def test_exertion_has_stable_outputs_without_valid_motion_windows():
         "acceleration_y": [0.0, 0.0],
         "acceleration_z": [0.0, 0.0],
     })
+    motion = _with_rotation_columns(motion)
 
     result = compute_exertion_markers(ParticipantData(participant_id="P001", motion=motion))
 
@@ -189,6 +228,7 @@ def test_exertion_marker_tuning_can_be_overridden():
             "acceleration_z": [0.0] * 21,
         }
     )
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": list(range(60, 101, 2))})
     data = ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
 
@@ -241,6 +281,9 @@ def test_exertion_canonicalizes_required_columns_and_ignores_extras():
             "acceleration_x": [0.1, 0.5, 0.8],
             "acceleration_y": [0.0, 0.2, 0.3],
             "acceleration_z": [0.0, 0.1, 0.2],
+            "rotation_rate_x": [100.0, -100.0, 50.0],
+            "rotation_rate_y": [-100.0, 100.0, -50.0],
+            "rotation_rate_z": [50.0, -50.0, 100.0],
         }
     )
     expected_heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": [60.0, 75.0, 90.0]})
@@ -261,7 +304,7 @@ def test_exertion_reports_missing_required_canonical_columns():
             ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
         )
     except ValueError as exc:
-        assert "motion data is missing required columns: acceleration_y, acceleration_z" in str(exc)
+        assert "motion data is missing required columns: acceleration_y, acceleration_z, rotation_rate_x, rotation_rate_y, rotation_rate_z" in str(exc)
     else:
         raise AssertionError("Expected missing motion columns to raise ValueError")
 
@@ -276,6 +319,7 @@ def test_exertion_runs_without_heart_rate_and_returns_none_for_hr_markers():
             "acceleration_z": [0.0, 0.0, 0.1, 0.2],
         }
     )
+    motion = _with_rotation_columns(motion)
 
     result = compute_exertion_markers(ParticipantData(participant_id="P001", motion=motion))
 
@@ -300,6 +344,7 @@ def test_exertion_returns_none_for_hr_markers_below_sample_threshold():
             "acceleration_z": [0.0] * 20,
         }
     )
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": list(range(60, 100, 2))})
 
     result = compute_exertion_markers(
@@ -323,6 +368,7 @@ def test_optional_heart_rate_stream_still_requires_its_required_columns():
             "acceleration_z": [0.0, 0.1],
         }
     )
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({"timestamp": timestamps})
 
     try:
@@ -345,6 +391,7 @@ def test_exertion_rejects_unprepared_timestamp_strings():
             "acceleration_z": [0.0, 0.1],
         }
     )
+    motion = _with_rotation_columns(motion)
     heart_rate = pd.DataFrame({"timestamp": pd.to_datetime(timestamps), "heart_rate": [60.0, 75.0]})
 
     try:
