@@ -46,6 +46,8 @@ HR_SMOOTH_SECONDS = 15
 
 def robust_zscore(x: pd.Series) -> pd.Series:
     """Robust z-score using median absolute deviation."""
+    if x.notna().sum() == 0:
+        return pd.Series(0.0, index=x.index)
     med = x.median(skipna=True)
     mad = np.nanmedian(np.abs(x - med))
 
@@ -110,20 +112,44 @@ def _smooth_signals(
     return motion, heart_rate.reset_index()
 
 
-def _summarize_daily_values(day_values: pd.Series) -> dict[str, float | int | None]:
-    clean = day_values.dropna()
-    if clean.empty:
+DAILY_FIELDS = (
+    "daily_motion_exertion",
+    "daily_hr_motion_exertion",
+    "daily_peak_hr",
+    "motion_exertion_per_hour",
+    "hr_motion_exertion_per_hour",
+    "hr_motion_corr",
+    "hr_motion_gain",
+    "hr_residual_mean",
+    "motion_wear_time",
+    "hr_motion_wear_time",
+)
+HR_FIELDS = (
+    "daily_hr_motion_exertion",
+    "daily_peak_hr",
+    "hr_motion_exertion_per_hour",
+    "hr_motion_corr",
+    "hr_motion_gain",
+    "hr_residual_mean",
+    "hr_motion_wear_time",
+)
+
+
+def _summarize_daily_values(values: pd.Series) -> dict[str, float]:
+    numbers = values.to_numpy(dtype=float, na_value=np.nan)
+    valid = np.isfinite(numbers)
+    clean = numbers[valid]
+    if not len(clean):
         return {"mean": np.nan, "std": np.nan, "ac1": np.nan, "slope": np.nan}
 
-    x = np.arange(len(clean), dtype=float)
-    slope = float(np.polyfit(x, clean.to_numpy(), 1)[0]) if len(clean) > 1 else np.nan
-    ac1 = float(clean.autocorr(lag=1)) if len(clean) > 2 else np.nan
-    return {
-        "mean": float(clean.mean()),
-        "std": float(clean.std(ddof=1)) if len(clean) > 1 else np.nan,
-        "ac1": ac1,
-        "slope": slope,
-    }
+    centered = clean - clean.mean()
+    denominator = np.sum(centered**2)
+    ac1 = np.nan
+    if len(clean) >= 3 and denominator > 0:
+        mean = clean.mean()
+        ac1 = float(np.sum((clean[:-1] - mean) * (clean[1:] - mean)) / denominator)
+    slope = float(np.polyfit(np.arange(len(numbers))[valid], clean, 1)[0]) if len(clean) >= 2 else 0.0
+    return {"mean": float(clean.mean()), "std": float(np.std(clean, ddof=0)), "ac1": ac1, "slope": slope}
 
 
 def exertion_raw(
@@ -253,10 +279,9 @@ def compute_exertion_markers(
         hr_smooth_seconds=hr_smooth_seconds,
     )
     if heart_rate is not None:
-        merged = motion[["timestamp", "motion_energy"]].merge(
-            heart_rate[["timestamp", "heart_rate", "heart_rate_peak"]],
-            how="left",
-            on="timestamp",
+        merged = pd.concat(
+            [motion[["timestamp", "motion_energy"]], heart_rate[["timestamp", "heart_rate", "heart_rate_peak"]]],
+            ignore_index=True,
         )
     else:
         merged = motion[["timestamp", "motion_energy"]].copy()
@@ -302,45 +327,59 @@ def compute_exertion_markers(
         for column in ("hr_motion_exertion", "hr_component", "heart_rate_peak"):
             windowed[column] = pd.Series([None] * len(windowed), index=windowed.index, dtype=object)
 
-    daily = windowed.groupby(windowed.index.normalize()).agg(
-        exertion=("exertion", "mean"),
-        wear_time=("motion_component", lambda s: int(len(s) * window_seconds)),
-        heart_rate_peak=("heart_rate_peak", lambda s: float(s.max()) if s.notna().any() else None),
-    )
-    daily.index.name = "date"
-    daily = daily.reset_index()
+    daily_rows = []
+    for date, day in windowed.groupby(windowed.index.normalize()):
+        motion_values = day["motion_exertion"].dropna()
+        if motion_values.empty:
+            continue
+        motion_wear_time = len(motion_values) * window_seconds
+        hr_values = day["hr_motion_exertion"].dropna() if has_sufficient_hr else pd.Series(dtype=float)
+        hr_wear_time = len(hr_values) * window_seconds
+        paired = day.loc[day["hr_motion_exertion"].notna(), ["hr_component", "motion_component"]]
+        hr_motion_corr = hr_motion_gain = hr_residual_mean = np.nan
+        if len(paired) >= 3:
+            hr_array = paired["hr_component"].to_numpy(dtype=float)
+            motion_array = paired["motion_component"].to_numpy(dtype=float)
+            if np.std(hr_array) > 0 and np.std(motion_array) > 0:
+                hr_motion_corr = float(np.corrcoef(hr_array, motion_array)[0, 1])
+                slope, intercept = np.polyfit(motion_array, hr_array, 1)
+                hr_motion_gain = float(slope)
+                residuals = hr_array - (slope * motion_array + intercept)
+                positive_residuals = residuals[residuals > 0]
+                hr_residual_mean = float(positive_residuals.mean()) if len(positive_residuals) else 0.0
+
+        daily_rows.append({
+            "date": date,
+            "daily_motion_exertion": float(motion_values.mean()),
+            "daily_hr_motion_exertion": float(hr_values.mean()) if len(hr_values) else None,
+            "daily_peak_hr": float(day["heart_rate_peak"].max()) if has_sufficient_hr and day["heart_rate_peak"].notna().any() else None,
+            "motion_exertion_per_hour": float(motion_values.sum() / motion_wear_time),
+            "hr_motion_exertion_per_hour": float(hr_values.sum() / hr_wear_time) if hr_wear_time else None,
+            "hr_motion_corr": hr_motion_corr if has_sufficient_hr else None,
+            "hr_motion_gain": hr_motion_gain if has_sufficient_hr else None,
+            "hr_residual_mean": hr_residual_mean if has_sufficient_hr else None,
+            "motion_wear_time": motion_wear_time,
+            "hr_motion_wear_time": hr_wear_time if has_sufficient_hr else None,
+        })
+
+    daily = pd.DataFrame(daily_rows, columns=("date", *DAILY_FIELDS))
     if not has_sufficient_hr:
-        daily["heart_rate_peak"] = pd.Series([None] * len(daily), dtype=object)
-    daily = daily.sort_values("date").reset_index(drop=True)
+        for field in HR_FIELDS:
+            daily[field] = pd.Series([None] * len(daily), dtype=object)
+    else:
+        for field in HR_FIELDS:
+            if field != "hr_motion_wear_time":
+                daily[field] = daily[field].astype(object).where(daily[field].notna(), None)
 
-    daily_summary = _summarize_daily_values(daily["exertion"])
-    hourly = windowed["exertion"].resample("h").mean() if not windowed.empty else pd.Series(dtype=float)
-    hourly_summary = _summarize_daily_values(hourly) if not hourly.empty else {"mean": np.nan, "std": np.nan, "ac1": np.nan, "slope": np.nan}
-
-    summary = {
-        "num_valid_days": int(daily["exertion"].notna().sum()),
-        "mean_daily_exertion": daily_summary["mean"],
-        "std_daily_exertion": daily_summary["std"],
-        "ac1_daily_exertion": daily_summary["ac1"],
-        "slope_daily_exertion": daily_summary["slope"],
-        "mean_exertion_per_hour": hourly_summary["mean"],
-        "std_exertion_per_hour": hourly_summary["std"],
-        "ac1_exertion_per_hour": hourly_summary["ac1"],
-        "slope_exertion_per_hour": hourly_summary["slope"],
-        "mean_hr_motion_corr": np.nan if has_sufficient_hr else None,
-        "mean_hr_motion_gain": np.nan if has_sufficient_hr else None,
-        "mean_hr_residual_mean": np.nan if has_sufficient_hr else None,
-        "mean_wear_time": float(daily["wear_time"].mean()) if not daily.empty else np.nan,
-        "heart_rate_peak": (
-            float(daily["heart_rate_peak"].max())
-            if has_sufficient_hr and daily["heart_rate_peak"].notna().any()
-            else None
-        ),
-    }
+    summary = {"num_valid_days": len(daily)}
+    for field in DAILY_FIELDS:
+        stats = _summarize_daily_values(daily[field])
+        for statistic, value in stats.items():
+            summary[f"{statistic}_{field}"] = None if field in HR_FIELDS and not has_sufficient_hr else value
 
     markers = pd.DataFrame([summary])
     context = MarkerContext(data=data, derived={"exertion": windowed["exertion"].to_dict()})
     return MarkerResult(markers=markers, daily=daily, details={"windowed_exertion": windowed}, metadata={"marker": "exertion"}, context=context)
 
 
-__all__ = ["compute_exertion_markers", "REQUIREMENTS", "clean_heart_rate", "compute_motion_energy", "exertion_raw"]
+__all__ = ["REQUIREMENTS", "clean_heart_rate", "compute_exertion_markers", "compute_motion_energy", "exertion_raw"]

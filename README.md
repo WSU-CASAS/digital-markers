@@ -14,6 +14,18 @@ The project is developed by the CASAS Lab at Washington State University.
 - Marker families can declare required and optional inputs.
 - Intermediate/daily results can be retained for reproducibility and inspection.
 
+## Exertion outputs
+
+`compute_exertion_markers(participant)` returns a `MarkerResult` with one row per
+motion-valid day in `daily` and one participant-level row in `markers`. Daily
+values include separate motion-only and HR-plus-motion exertion, peak HR,
+exertion per wear second, HR/motion relationships, and wear time in seconds.
+The per-hour-named metrics retain the reference method's convention of dividing
+the sum of window exertion by wear time in seconds. The summary table reports
+mean, population standard deviation, lag-one autocorrelation, and daily trend
+for each daily marker. HR-derived values are unavailable when fewer than 21
+valid HR samples exist; motion-only values remain available.
+
 ## Planned inputs
 
 - Motion, heart rate, location, audio
