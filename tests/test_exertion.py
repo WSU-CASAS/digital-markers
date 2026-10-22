@@ -4,7 +4,7 @@ import pandas as pd
 from digital_markers import ParticipantData
 from digital_markers.data.validation import canonicalize_columns
 from digital_markers.exertion import compute_exertion_markers
-from digital_markers.exertion.markers import _smooth_signals
+from digital_markers.exertion.markers import _smooth_signals, _summarize_daily_values
 
 DAILY_FIELDS = (
     "date", "daily_motion_exertion", "daily_hr_motion_exertion", "daily_peak_hr",
@@ -61,13 +61,22 @@ def test_exertion_markers_are_computed_from_motion_and_hr():
     data = ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
     result = compute_exertion_markers(data)
 
-    assert result.markers["num_valid_days"].iloc[0] == 1
+    assert len(result.daily) == 1
     assert result.markers["mean_daily_motion_exertion"].iloc[0] > 0
     assert result.daily["daily_motion_exertion"].notna().all()
     assert list(result.daily.columns) == list(DAILY_FIELDS)
     assert list(result.markers.columns) == [
-        "num_valid_days",
-        *(f"{stat}_{field}" for field in DAILY_FIELDS[1:] for stat in ("mean", "std", "ac1", "slope")),
+        *(
+            f"{stat}_{field}"
+            for field in DAILY_FIELDS[1:]
+            if field not in {
+                "motion_exertion_per_hour",
+                "hr_motion_exertion_per_hour",
+                "motion_wear_time",
+                "hr_motion_wear_time",
+            }
+            for stat in ("mean", "std", "ac1", "slope")
+        ),
     ]
 
 
@@ -150,7 +159,7 @@ def test_exertion_daily_and_summary_statistics_follow_reference_formulas():
     gain, intercept = np.polyfit(paired["motion_component"], paired["hr_component"], 1)
     residuals = paired["hr_component"] - (gain * paired["motion_component"] + intercept)
 
-    assert summary["num_valid_days"] == 3
+    assert len(daily) == 3
     assert daily["daily_peak_hr"].tolist() == [80.0, 82.0, 84.0]
     assert daily["motion_wear_time"].tolist() == [630, 630, 630]
     assert daily["hr_motion_wear_time"].tolist() == [630, 630, 630]
@@ -192,7 +201,7 @@ def test_exertion_keeps_motion_day_when_hr_is_missing_that_day():
         use_short_smoothing=False,
     )
 
-    assert result.markers["num_valid_days"].iloc[0] == 2
+    assert len(result.daily) == 2
     assert result.daily["daily_motion_exertion"].notna().all()
     assert result.daily["daily_hr_motion_exertion"].iloc[0] is not None
     assert result.daily["daily_hr_motion_exertion"].iloc[1] is None
@@ -213,9 +222,18 @@ def test_exertion_has_stable_outputs_without_valid_motion_windows():
 
     assert list(result.daily.columns) == list(DAILY_FIELDS)
     assert result.daily.empty
-    assert result.markers["num_valid_days"].iloc[0] == 0
+    assert result.daily.empty
     assert np.isnan(result.markers["mean_daily_motion_exertion"].iloc[0])
     assert result.markers["mean_daily_hr_motion_exertion"].iloc[0] is None
+
+
+def test_exertion_summary_autocorrelation_uses_consecutive_calendar_days():
+    values = pd.Series([1.0, 2.0, 3.0, 4.0])
+    dates = pd.Series(pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-04", "2026-01-05"]))
+
+    summary = _summarize_daily_values(values, dates)
+
+    np.testing.assert_allclose(summary["ac1"], 0.6)
 
 
 def test_exertion_marker_tuning_can_be_overridden():

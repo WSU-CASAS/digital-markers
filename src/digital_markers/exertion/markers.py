@@ -137,21 +137,37 @@ HR_FIELDS = (
     "hr_residual_mean",
     "hr_motion_wear_time",
 )
+EXCLUDED_AGGREGATE_FIELDS = {
+    "motion_exertion_per_hour",
+    "hr_motion_exertion_per_hour",
+    "motion_wear_time",
+    "hr_motion_wear_time",
+}
 
 
-def _summarize_daily_values(values: pd.Series) -> dict[str, float]:
+def _summarize_daily_values(values: pd.Series, dates: pd.Series) -> dict[str, float]:
     numbers = values.to_numpy(dtype=float, na_value=np.nan)
     valid = np.isfinite(numbers)
     clean = numbers[valid]
     if not len(clean):
         return {"mean": np.nan, "std": np.nan, "ac1": np.nan, "slope": np.nan}
 
-    centered = clean - clean.mean()
-    denominator = np.sum(centered**2)
     ac1 = np.nan
-    if len(clean) >= 3 and denominator > 0:
-        mean = clean.mean()
-        ac1 = float(np.sum((clean[:-1] - mean) * (clean[1:] - mean)) / denominator)
+    dated_values = pd.Series(
+        numbers,
+        index=pd.DatetimeIndex(pd.to_datetime(dates)).normalize(),
+    )
+    dated_values = dated_values[np.isfinite(dated_values.to_numpy())]
+    dated_values = dated_values.groupby(level=0).mean().sort_index()
+    if len(dated_values) >= 3:
+        dated_numbers = dated_values.to_numpy()
+        centered = dated_numbers - dated_numbers.mean()
+        denominator = np.sum(centered**2)
+        consecutive = np.diff(dated_values.index.to_numpy()) == np.timedelta64(1, "D")
+        consecutive_count = int(consecutive.sum())
+        if denominator > 0 and consecutive_count >= 2:
+            numerator = np.sum((centered[:-1] * centered[1:])[consecutive])
+            ac1 = float((numerator / consecutive_count) / (denominator / len(dated_numbers)))
     slope = float(np.polyfit(np.arange(len(numbers))[valid], clean, 1)[0]) if len(clean) >= 2 else 0.0
     return {"mean": float(clean.mean()), "std": float(np.std(clean, ddof=0)), "ac1": ac1, "slope": slope}
 
@@ -379,9 +395,11 @@ def compute_exertion_markers(
             if field != "hr_motion_wear_time":
                 daily[field] = daily[field].astype(object).where(daily[field].notna(), None)
 
-    summary = {"num_valid_days": len(daily)}
+    summary = {}
     for field in DAILY_FIELDS:
-        stats = _summarize_daily_values(daily[field])
+        if field in EXCLUDED_AGGREGATE_FIELDS:
+            continue
+        stats = _summarize_daily_values(daily[field], daily["date"])
         for statistic, value in stats.items():
             summary[f"{statistic}_{field}"] = None if field in HR_FIELDS and not has_sufficient_hr else value
 
