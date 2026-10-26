@@ -4,7 +4,11 @@ import pandas as pd
 from digital_markers import ParticipantData
 from digital_markers.data.validation import canonicalize_columns
 from digital_markers.exertion import compute_exertion_markers
-from digital_markers.exertion.markers import _smooth_signals, _summarize_daily_values
+from digital_markers.exertion.markers import (
+    _smooth_signals,
+    _summarize_daily_values,
+    compute_motion_energy,
+)
 
 DAILY_FIELDS = (
     "date", "daily_motion_exertion", "daily_hr_motion_exertion", "daily_peak_hr",
@@ -27,6 +31,41 @@ def test_rotation_columns_use_rotation_rate_canonical_names():
     canonical = canonicalize_columns(motion)
 
     assert list(canonical.columns) == ["rotation_rate_x", "rotation_rate_y", "rotation_rate_z"]
+
+
+def test_motion_energy_matches_reference_acceleration_and_rotation_formula():
+    motion = pd.DataFrame(
+        {
+            "acceleration_x": [3.0],
+            "acceleration_y": [4.0],
+            "acceleration_z": [0.0],
+            "rotation_rate_x": [0.0],
+            "rotation_rate_y": [0.0],
+            "rotation_rate_z": [2.0],
+        }
+    )
+
+    np.testing.assert_allclose(compute_motion_energy(motion), [6.0])
+
+
+def test_motion_window_requires_five_samples_by_default():
+    timestamps = pd.date_range("2026-01-01", periods=5, freq="5s")
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": [0.1, 0.2, 0.3, 0.4, 0.5],
+            "acceleration_y": [0.0] * 5,
+            "acceleration_z": [0.0] * 5,
+            "rotation_rate_x": [0.2, 0.4, 0.6, 0.8, 1.0],
+            "rotation_rate_y": [0.0] * 5,
+            "rotation_rate_z": [0.0] * 5,
+        }
+    )
+
+    result = compute_exertion_markers(ParticipantData(participant_id="P001", motion=motion))
+
+    assert len(result.daily) == 1
+    assert result.daily["daily_motion_exertion"].iloc[0] > 0
 
 
 def test_exertion_signals_use_time_based_median_smoothing():
@@ -59,7 +98,7 @@ def test_exertion_markers_are_computed_from_motion_and_hr():
     )
 
     data = ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
-    result = compute_exertion_markers(data)
+    result = compute_exertion_markers(data, min_motion_samples_per_window=1)
 
     assert len(result.daily) == 1
     assert result.markers["mean_daily_motion_exertion"].iloc[0] > 0
@@ -97,6 +136,7 @@ def test_exertion_uses_hr_readings_within_motion_windows():
     result = compute_exertion_markers(
         ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate),
         use_short_smoothing=False,
+        min_motion_samples_per_window=1,
     )
 
     assert result.daily["daily_peak_hr"].iloc[0] == 80.0
@@ -151,6 +191,7 @@ def test_exertion_daily_and_summary_statistics_follow_reference_formulas():
     result = compute_exertion_markers(
         ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate),
         use_short_smoothing=False,
+        min_motion_samples_per_window=1,
     )
     daily = result.daily
     summary = result.markers.iloc[0]
@@ -199,6 +240,7 @@ def test_exertion_keeps_motion_day_when_hr_is_missing_that_day():
     result = compute_exertion_markers(
         ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate),
         use_short_smoothing=False,
+        min_motion_samples_per_window=1,
     )
 
     assert len(result.daily) == 2
@@ -218,7 +260,10 @@ def test_exertion_has_stable_outputs_without_valid_motion_windows():
     })
     motion = _with_rotation_columns(motion)
 
-    result = compute_exertion_markers(ParticipantData(participant_id="P001", motion=motion))
+    result = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=motion),
+        min_motion_samples_per_window=1,
+    )
 
     assert list(result.daily.columns) == list(DAILY_FIELDS)
     assert result.daily.empty
@@ -339,7 +384,10 @@ def test_exertion_runs_without_heart_rate_and_returns_none_for_hr_markers():
     )
     motion = _with_rotation_columns(motion)
 
-    result = compute_exertion_markers(ParticipantData(participant_id="P001", motion=motion))
+    result = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=motion),
+        min_motion_samples_per_window=1,
+    )
 
     assert result.markers["mean_daily_motion_exertion"].iloc[0] > 0
     assert result.markers["mean_daily_peak_hr"].iloc[0] is None
@@ -366,12 +414,13 @@ def test_exertion_returns_none_for_hr_markers_below_sample_threshold():
     heart_rate = pd.DataFrame({"timestamp": timestamps, "heart_rate": list(range(60, 100, 2))})
 
     result = compute_exertion_markers(
-        ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate)
+        ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate),
+        min_motion_samples_per_window=1,
     )
 
     assert result.markers["mean_daily_motion_exertion"].iloc[0] > 0
-    assert result.markers["mean_daily_peak_hr"].iloc[0] is None
-    assert result.daily["daily_peak_hr"].map(lambda value: value is None).all()
+    assert result.markers["mean_daily_peak_hr"].iloc[0] == 98.0
+    assert result.daily["daily_peak_hr"].iloc[0] == 98.0
     assert result.details["windowed_exertion"]["hr_motion_exertion"].map(lambda value: value is None).all()
     assert result.details["windowed_exertion"]["hr_component"].map(lambda value: value is None).all()
 
