@@ -170,6 +170,42 @@ def test_exertion_excludes_detected_nonwear_time():
     assert result.details["windowed_exertion"]["motion_exertion"].notna().sum() == 2
 
 
+def test_exertion_excludes_nonwear_heart_rate_from_markers():
+    count = 1200
+    timestamps = pd.date_range("2026-01-01", periods=count, freq="100ms")
+    active_acceleration = np.tile([0.0, 0.1], 300)
+    active_rotation = np.tile([0.0, 0.2], 300)
+    motion = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "acceleration_x": np.r_[active_acceleration, np.zeros(600)],
+            "acceleration_y": np.zeros(count),
+            "acceleration_z": np.zeros(count),
+            "rotation_rate_x": np.r_[active_rotation, np.zeros(600)],
+            "rotation_rate_y": np.zeros(count),
+            "rotation_rate_z": np.zeros(count),
+        }
+    )
+    heart_rate = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "heart_rate": np.r_[np.tile(np.arange(60, 80), 30), np.full(600, 200.0)],
+        }
+    )
+
+    result = compute_exertion_markers(
+        ParticipantData(participant_id="P001", motion=motion, heart_rate=heart_rate),
+        use_short_smoothing=False,
+    )
+
+    windowed = result.details["windowed_exertion"]
+    assert result.daily["daily_peak_hr"].iloc[0] == 79.0
+    assert result.daily["hr_motion_wear_time"].iloc[0] == 60
+    np.testing.assert_allclose(windowed["hr_component"].iloc[:2], [0.5, 0.5])
+    assert windowed["heart_rate_peak"].iloc[:2].max() == 79.0
+    assert windowed["heart_rate_peak"].iloc[2:].isna().all()
+
+
 def test_exertion_daily_and_summary_statistics_follow_reference_formulas():
     timestamps = pd.DatetimeIndex([
         timestamp

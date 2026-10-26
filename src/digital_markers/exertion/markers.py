@@ -287,6 +287,12 @@ def compute_exertion_markers(
         raise ValueError("heart_rate.heart_rate must have a numeric dtype before calling exertion")
 
     wear_mask = detect_nonwear(motion, rate=10, window_minutes=1)
+    motion_wear = (
+        pd.DataFrame({"timestamp": motion["timestamp"], "worn": wear_mask.to_numpy()})
+        .dropna(subset=["timestamp"])
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
     motion = motion.loc[wear_mask.to_numpy(), MOTION_REQUIRED_COLUMNS].copy()
     motion = motion.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
     motion["motion_energy"] = compute_motion_energy(motion)
@@ -302,6 +308,16 @@ def compute_exertion_markers(
             .sort_values("timestamp")
             .reset_index(drop=True)
         )
+        if motion_wear.empty:
+            heart_rate = heart_rate.iloc[0:0].copy()
+        else:
+            heart_rate = pd.merge_asof(
+                heart_rate,
+                motion_wear,
+                on="timestamp",
+                direction="nearest",
+            )
+            heart_rate = heart_rate.loc[heart_rate["worn"]].drop(columns="worn")
         heart_rate["heart_rate"] = pd.to_numeric(heart_rate["heart_rate"], errors="coerce")
         if filter_signals:
             heart_rate = clean_heart_rate(
