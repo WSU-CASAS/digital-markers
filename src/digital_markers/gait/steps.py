@@ -1,45 +1,44 @@
-"""Step detection from acceleration magnitude."""
+"""Band-pass filtering and candidate step-peak detection."""
+
+from functools import lru_cache
 
 import numpy as np
-from scipy.signal import butter, filtfilt, find_peaks
+from scipy.signal import butter, find_peaks, sosfiltfilt
 
 
-def bandpass_filter(
-	values: np.ndarray,
+@lru_cache(maxsize=16)
+def cached_bandpass(fs: float) -> np.ndarray:
+	nyquist = fs / 2
+	return butter(
+		4,
+		[0.5 / nyquist, min(3.0, nyquist * 0.95) / nyquist],
+		btype="bandpass",
+		output="sos",
+	)
+
+
+def detect_step_peaks(
+	acceleration_magnitude: np.ndarray,
 	fs: float,
 	*,
-	low: float = 0.5,
-	high: float = 3.0,
-	order: int = 4,
+	max_cadence: float,
+	prominence_scale: float,
 ) -> np.ndarray:
-	if len(values) <= 27:
-		return values
-
-	nyquist = 0.5 * fs
-	numerator, denominator = butter(
-		order, [low / nyquist, high / nyquist], btype="band"
-	)
 	try:
-		return filtfilt(numerator, denominator, values)
-	except Exception:
-		return values
+		filtered = sosfiltfilt(cached_bandpass(fs), acceleration_magnitude)
+	except ValueError:
+		return np.array([], dtype=int)
 
-
-def detect_steps(acceleration_magnitude: np.ndarray, fs: float) -> np.ndarray:
-	if len(acceleration_magnitude) < fs * 2:
-		return np.array([])
-
-	filtered = bandpass_filter(acceleration_magnitude, fs)
-	standard_deviation = np.std(filtered)
-	if standard_deviation == 0:
-		return np.array([])
+	sigma = np.std(filtered)
+	if sigma < 1e-5:
+		return np.array([], dtype=int)
 
 	peaks, _ = find_peaks(
 		filtered,
-		distance=int(0.4 * fs),
-		prominence=standard_deviation * 0.5,
+		distance=max(1, int(fs * 60 / max_cadence)),
+		prominence=prominence_scale * sigma,
 	)
-	return peaks / fs
+	return peaks
 
 
-__all__ = ["bandpass_filter", "detect_steps"]
+__all__ = ["cached_bandpass", "detect_step_peaks"]

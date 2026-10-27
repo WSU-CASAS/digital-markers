@@ -1,4 +1,4 @@
-"""Gait markers."""
+"""Bout-based gait markers."""
 
 from digital_markers.gait.markers import compute_gait_markers
 
