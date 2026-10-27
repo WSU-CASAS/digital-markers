@@ -158,7 +158,7 @@ def compute_gait_markers(data: ParticipantData, *, fs: float = 50.0) -> MarkerRe
 			raise ValueError(f"motion.{column} must have a numeric dtype before calling gait")
 
 	motion = motion.dropna(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-	wear_mask = detect_nonwear(motion, rate=max(1, round(fs)), window_minutes=1)
+	wear_mask = detect_nonwear(motion)
 	worn_motion = motion.loc[wear_mask.to_numpy()].copy()
 	worn_motion["date"] = worn_motion["timestamp"].dt.normalize()
 
