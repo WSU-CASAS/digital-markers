@@ -80,6 +80,13 @@ Use these column names:
 | `heart_rate` | `timestamp`, `heart_rate` | None |
 | `location` | `timestamp`, `latitude`, `longitude` | None |
 
+`ParticipantData` automatically canonicalizes sensor column names when it is
+created. For example, `stamp` is accepted as `timestamp`, and
+`user_acceleration_x`, `user_acceleration_y`, and `user_acceleration_z` are
+accepted as the corresponding `acceleration_x`, `acceleration_y`, and
+`acceleration_z` columns. The input DataFrames are copied during this
+normalization; the original frames are unchanged.
+
 Use numeric values for sensor measurements. Exertion requires all three
 rotation-rate columns. Gait can run without rotation-rate columns; when
 provided, supply all three. Routine can run without them, but if any rotation
