@@ -1,50 +1,258 @@
 # digital-markers
 
 `digital-markers` is an open-source Python library from the CASAS Lab at
-Washington State University. It computes four implemented marker families from
+Washington State University. The package computes marker families from
 wearable sensor data: exertion, gait, location, and behavioral routine.
+Additional marker families will be added soon.
 
 ## Supported markers
 
-Each function accepts a `ParticipantData` instance and returns a `MarkerResult`.
-Participant inputs are kept in separate Pandas DataFrames; results include
-participant-level markers and, where applicable, daily values and detail tables.
-
 ### Exertion
 
-`digital_markers.exertion.compute_exertion_markers(participant)` computes daily
-motion-only and heart-rate-plus-motion exertion markers, with participant-level
-summaries. Motion data must include timestamps, acceleration, and rotation-rate
-axes. Heart-rate data is optional; HR-derived values are unavailable when fewer
-than 21 valid HR samples exist.
+`compute_exertion_markers` computes daily motion-only and
+heart-rate-plus-motion exertion markers, with participant-level summaries.
 
 ### Gait
 
-`digital_markers.gait.compute_gait_markers(participant)` computes daily
-wrist-derived walking-bout markers, including step counts, cadence, step
-intervals, gait frequency, and signal measures. Timestamps and acceleration
-axes are required; rotation-rate axes are optional.
+`compute_gait_markers` computes daily wrist-derived walking-bout markers,
+including step counts, cadence, step intervals, gait frequency, and signal
+measures.
 
 ### Location
 
-`digital_markers.location.compute_location_markers(participant)` returns
-participant-level and daily location measurements. `details["home_locations"]`
-and `details["staypoints"]` contain home-location and staypoint tables. Keep
-timestamps for all observed sensor rows in `ParticipantData.location`, including
-rows without GPS coordinates; latitude and longitude are required on rows with
-a GPS fix. A supplied motion stream's timestamps are also used to determine
-recorded minutes.
+`compute_location_markers` returns participant-level and daily location
+measurements, plus home-location and staypoint tables in `details`.
 
 ### Behavioral routine
 
-`digital_markers.routine.compute_routine_markers(participant)` computes
-model-free routine markers from 10 Hz motion data using fixed acceleration
-thresholds. Timestamps and acceleration axes are required; rotation-rate data
-and GPS coordinates are optional. Coordinates are used from
-`ParticipantData.location` when supplied, or from the motion table when
-latitude and longitude are present there. The result includes participant-level
-summaries and five-minute interval, state-balance, region, and diagnostic tables
-in `details`.
+`compute_routine_markers` computes model-free routine markers from 10 Hz motion
+data using fixed acceleration thresholds. Its details include five-minute
+interval, state-balance, region, and diagnostic tables.
+
+## Preparing participant data
+
+The `compute_*_markers` functions accept a `ParticipantData` instance and
+return a `MarkerResult`. Prepare one DataFrame for each sensor stream and use
+the canonical column names below. Sensor timestamps must be parseable as
+datetimes. Exertion requires the motion timestamp and, when heart rate is
+provided, the heart-rate timestamp to have a Pandas datetime dtype. Gait and
+routine require a datetime motion timestamp.
+
+The package uses Pandas readers, so inputs can come from CSV or Parquet. This
+CSV example assumes timestamps have no timezone or UTC offset and already
+represent local wall-clock time:
+
+```python
+import pandas as pd
+from digital_markers import ParticipantData
+
+motion = pd.read_csv("motion.csv")
+motion["timestamp"] = pd.to_datetime(motion["timestamp"])
+
+heart_rate = pd.read_csv("heart_rate.csv")
+heart_rate["timestamp"] = pd.to_datetime(heart_rate["timestamp"])
+
+location = pd.read_csv("location.csv")
+location["timestamp"] = pd.to_datetime(location["timestamp"])
+
+participant = ParticipantData(
+    participant_id="P001",
+    timezone="America/Los_Angeles",
+    motion=motion,
+    heart_rate=heart_rate,
+    location=location,
+)
+```
+
+For Parquet, use `pd.read_parquet("motion.parquet")` (and likewise for the
+other streams; Pandas needs an optional Parquet engine such as `pyarrow`).
+Parquet timestamps are often already datetimes; if a timestamp column was
+stored as text, convert it with `pd.to_datetime` before calling the marker
+functions. Do not infer a timezone from a naive timestamp: establish from the
+source whether it represents local time or UTC. A naive local timestamp parsed
+with `utc=True` is interpreted as UTC, not local time.
+
+Use these column names:
+
+| Stream | Required columns | Optional columns |
+|---|---|---|
+| `motion` | `timestamp`, `acceleration_x`, `acceleration_y`, `acceleration_z` | `rotation_rate_x`, `rotation_rate_y`, `rotation_rate_z`; routine can also use `latitude`, `longitude` |
+| `heart_rate` | `timestamp`, `heart_rate` | None |
+| `location` | `timestamp`, `latitude`, `longitude` | None |
+
+Use numeric values for sensor measurements. Exertion requires all three
+rotation-rate columns. Gait can run without rotation-rate columns; when
+provided, supply all three. Routine can run without them, but if any rotation
+column is present, all three are required. Location requires the latitude and
+longitude columns, but their values may be missing on rows without a GPS fix.
+Keep those rows and their timestamps: location uses them to estimate observed
+recording time. Routine uses `location` coordinates when supplied, or motion
+coordinates when present. Its motion input is expected at 10 Hz.
+
+### Timestamp and local-time guidance
+
+Use the participant's IANA timezone (for example, `America/Los_Angeles`) as
+the source of truth for local time. Keep original timestamps and their source
+timezone/UTC-offset information in your stored data whenever possible. A
+timezone-naive timestamp does not identify a timezone: treat it as local only
+when the source confirms it is already local. If naive timestamps represent
+UTC, localize them as UTC before converting; do not parse them as local time.
+For example, for a CSV column known to contain UTC timestamps:
+
+```python
+frame = pd.read_csv("motion.csv")
+local_timezone = "America/Los_Angeles"
+timestamps_utc = pd.to_datetime(frame["timestamp"], utc=True)
+frame["timestamp"] = timestamps_utc.dt.tz_convert(local_timezone)
+```
+
+`utc=True` is appropriate in that example only because the source is known to
+be UTC (or contains explicit offsets). For naive local timestamps, use
+`pd.to_datetime` without `utc=True`, as in the earlier example. If localizing
+naive timestamps to a named timezone, choose an explicit policy for daylight
+saving transitions: a fall-back clock change can make a local time occur twice,
+and a spring-forward change can make some local times nonexistent. Pandas
+defaults to raising on ambiguous or nonexistent times; resolve them using
+source metadata rather than guessing.
+
+The current marker functions do not apply one common local-time conversion:
+
+- Routine converts timezone-aware motion and location timestamps to
+  `ParticipantData.timezone`, or UTC when `timezone` is omitted. Naive
+  timestamps are left unchanged and treated as local clock values.
+- Exertion, gait, and location do not use `ParticipantData.timezone` to
+  convert inputs. Their daily grouping follows the timestamps as processed by
+  each implementation; timezone-aware inputs may therefore not align with
+  routine's local-day grouping.
+
+Set `ParticipantData.timezone` for routine and ensure that motion and
+heart-rate timestamps use compatible conventions for exertion. If local-day
+alignment across all four marker families is essential, convert the streams
+consistently before calling them and validate results around midnight and
+daylight-saving transitions. Converting timezone-aware values to local time and
+then removing timezone information can align ordinary local-day boundaries, but
+it loses the distinction between the two occurrences of a repeated fall-back
+time; routine removes duplicate motion timestamps. Retain the original
+timezone-aware timestamps so that this ambiguity can be detected and handled
+for the study's data.
+
+## Calling the marker functions
+
+Import each function from its marker package. All functions take the same
+participant object:
+
+```python
+from digital_markers.exertion import compute_exertion_markers
+from digital_markers.gait import compute_gait_markers
+from digital_markers.location import compute_location_markers
+from digital_markers.routine import compute_routine_markers
+
+exertion = compute_exertion_markers(participant)
+gait = compute_gait_markers(participant)
+location_result = compute_location_markers(participant)
+routine = compute_routine_markers(participant)
+```
+
+Exertion requires `motion`; `heart_rate` is optional and can be omitted from
+`ParticipantData` or set to `None`. Gait and routine require `motion`.
+Location requires `location`; `motion` is optional and contributes timestamps
+to its recorded-time calculations. Routine can use location data but does not
+require it. Location and routine currently take no marker-specific keyword
+arguments; routine configuration uses fixed thresholds.
+
+### Optional exertion arguments
+
+Exertion defaults are suitable for typical use. The keyword-only arguments let
+you customize windowing, signal filtering, and HR availability:
+
+| Argument | Default | Purpose |
+|---|---:|---|
+| `time_window` | `None` | Pandas frequency string for aggregation windows; when unset, uses `window_seconds`. Keep `window_seconds` consistent when changing this frequency because it is also used in wear-time calculations. |
+| `window_seconds` | `30` | Default aggregation window in seconds and the window duration used for wear-time calculations. |
+| `hr_weight`, `motion_weight` | `0.3`, `0.7` | Weights for the HR and motion components of combined exertion. |
+| `min_hr`, `max_hr` | `35`, `220` | Plausible HR bounds used for peak-HR reporting and HR cleaning when enabled. |
+| `motion_robust_z_max`, `hr_robust_z_max` | `6.0`, `4.0` | Robust outlier cutoffs for motion and HR when signal filtering is enabled. |
+| `min_motion_samples_per_window`, `min_hr_samples_per_window` | `5`, `1` | Minimum samples required to calculate each window's motion or HR measure. |
+| `min_hr_values_for_markers` | `21` | Minimum valid HR samples needed to report HR-derived markers. |
+| `filter_signals` | `False` | Enable robust outlier filtering for motion and HR values. |
+| `use_short_smoothing` | `None` | Enable/disable rolling-median smoothing. `None` follows `filter_signals`; an explicit boolean overrides it. |
+| `motion_smooth_seconds`, `hr_smooth_seconds` | `5`, `15` | Rolling-median window widths in seconds when smoothing is enabled. |
+
+For example:
+
+```python
+exertion = compute_exertion_markers(
+    participant,
+    window_seconds=30,
+    filter_signals=True,
+    min_hr_values_for_markers=30,
+)
+```
+
+### Optional gait arguments
+
+Gait accepts keyword-only parameters for sampling rate and bout detection. The
+defaults are tuned for 10 Hz wrist motion; adjust them to match the sampling
+rate and study protocol:
+
+| Argument | Default | Purpose |
+|---|---:|---|
+| `fs` | `10.0` | Motion sampling frequency in Hz. |
+| `wear_threshold` | `0.5` | Cutoff applied to the binary wear mask; the default retains samples marked worn. |
+| `max_gap_factor` | `2.5` | Gap multiplier used to split discontinuous motion segments. |
+| `min_steps` | `8` | Minimum steps for an accepted walking bout. |
+| `min_bout_seconds` | `4.0` | Minimum walking-bout duration. |
+| `max_step_gap_seconds` | `1.5` | Maximum allowed gap between detected steps. |
+| `min_cadence`, `max_cadence` | `45.0`, `180.0` | Accepted cadence range in steps per minute. |
+| `max_interval_cv` | `0.4` | Maximum coefficient of variation for step intervals. |
+| `prominence_scale` | `0.5` | Scale factor used for step-peak prominence detection. |
+
+
+## Reading results
+
+`MarkerResult` has `markers`, `daily`, `details`, and `metadata` attributes:
+
+```python
+print(exertion.markers.head())  # participant-level summary
+print(exertion.daily.head())    # one row per day, when provided by the marker
+
+print(gait.daily[["date", "num_steps", "num_walking_bouts"]])
+print(location_result.details["home_locations"])
+print(routine.details["state_balance"])
+
+for name, table in routine.details.items():
+    print(name, table.shape)
+```
+
+`markers` contains participant-level values; `daily` contains daily
+measurements when that marker provides them. Routine does not provide a `daily`
+table: its five-minute records and summaries are in `details`. Use
+`details.keys()` to see which additional tables are available, and inspect
+`metadata` for marker-specific information such as participant ID and sampling
+rate.
+
+The tables are marker-specific. Exertion daily rows include motion-only and
+HR-plus-motion exertion, peak HR, HR/motion relationships, and wear time;
+participant summaries report statistics across daily measurements. Gait daily
+rows include step and bout counts, walking duration, cadence, step-interval and
+signal measures; participant summaries include means, standard deviations,
+trends, and valid/recorded day counts. In summary column names, `mean_` denotes
+the average across days, `std_` the spread, `slope_` the linear trend over time,
+and `ac1_` lag-one autocorrelation when consecutive-day data is available;
+exact calculations vary by marker. Location returns daily and
+participant-level movement summaries, with `details["home_locations"]` and
+`details["staypoints"]` for home and staypoint tables. Routine includes
+`details["intervals"]`, `details["state_balance"]`, `details["regions"]`,
+`details["motion_diagnostics"]`, and `details["location_diagnostics"]`.
+
+Missing values are meaningful: a value may be unavailable because the stream
+was not supplied or there were too few valid observations. In particular,
+exertion's HR-derived metrics are unavailable when fewer than
+`min_hr_values_for_markers` valid HR samples exist; motion-only results remain
+available. Location can return empty summary tables when there are too few GPS
+fixes or no recorded minutes. Check the relevant counts and detail tables
+instead of replacing missing values with zero.
+
 
 ## Installation
 
