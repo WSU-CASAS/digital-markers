@@ -13,6 +13,6 @@ htmlcov/
 .vscode/
 .idea/
 refsrc
-data/
+/data/
 results/
 local/
