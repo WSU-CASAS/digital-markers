@@ -26,6 +26,16 @@ mean, population standard deviation, lag-one autocorrelation, and daily trend
 for each daily marker. HR-derived values are unavailable when fewer than 21
 valid HR samples exist; motion-only values remain available.
 
+## Location outputs
+
+`compute_location_markers(participant)` returns a `MarkerResult`. The participant
+summary is in `markers`, daily measurements are in `daily`, and
+`details["home_locations"]` and `details["staypoints"]` contain the other two
+tables corresponding to the reference CSV outputs. Keep timestamps for all
+observed sensor rows in `ParticipantData.location`, including rows without GPS
+coordinates; a supplied `motion` stream's timestamps are also used to determine
+recorded minutes. GPS coordinates are required only on rows containing a fix.
+
 ## Planned inputs
 
 - Motion, heart rate, location, audio
