@@ -36,6 +36,17 @@ observed sensor rows in `ParticipantData.location`, including rows without GPS
 coordinates; a supplied `motion` stream's timestamps are also used to determine
 recorded minutes. GPS coordinates are required only on rows containing a fix.
 
+## Behavioral routine outputs
+
+`compute_routine_markers(participant)` computes model-free routine markers from
+10 Hz motion data using fixed acceleration thresholds. Acceleration and
+timestamps are required; rotation-rate data and GPS coordinates are optional.
+Coordinates are used from `ParticipantData.location` when supplied, or from the
+motion table when latitude and longitude are present there. The result contains
+participant-level routine summaries in `markers` and five-minute interval,
+state-balance, region, and diagnostic tables in `details`. Routine computation
+does not create profile files or use a pretrained model.
+
 ## Planned inputs
 
 - Motion, heart rate, location, audio
@@ -53,7 +64,6 @@ recorded minutes. GPS coordinates are required only on rows containing a fix.
 - Activity level / exertion
 - Location and mobility
 - Gait
-- Behavioral routine
 - Speech and language
 - Air quality exposure
 - Activity recognition
