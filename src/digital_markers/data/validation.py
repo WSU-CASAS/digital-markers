@@ -3,7 +3,6 @@ from collections.abc import Mapping
 
 import pandas as pd
 
-
 _COLUMN_ALIASES = {
     "date_time": "timestamp",
     "datetime": "timestamp",
@@ -41,7 +40,10 @@ def canonicalize_columns(
     column_aliases = _COLUMN_ALIASES.copy()
     if aliases:
         column_aliases.update(
-            {_normalize_column_name(alias): _normalize_column_name(name) for alias, name in aliases.items()}
+            {
+                _normalize_column_name(alias): _normalize_column_name(name)
+                for alias, name in aliases.items()
+            }
         )
 
     columns = [

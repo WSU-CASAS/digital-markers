@@ -18,6 +18,7 @@ class ParticipantData:
     motion: pd.DataFrame | None = None
     heart_rate: pd.DataFrame | None = None
     location: pd.DataFrame | None = None
+    activity: pd.DataFrame | None = None
 
     def __post_init__(self) -> None:
         if self.motion is not None:
@@ -26,3 +27,5 @@ class ParticipantData:
             self.heart_rate = canonicalize_columns(self.heart_rate)
         if self.location is not None:
             self.location = canonicalize_columns(self.location)
+        if self.activity is not None:
+            self.activity = canonicalize_columns(self.activity)

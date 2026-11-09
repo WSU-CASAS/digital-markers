@@ -3,7 +3,7 @@
 `digital-markers` is an open-source Python library from the CASAS Lab at
 Washington State University. The package computes marker families from
 wearable sensor data: exertion, gait, location, and behavioral routine.
-Additional marker families will be added soon.
+Activity-label markers are also available.
 
 ## Supported markers
 
@@ -29,6 +29,13 @@ measurements, plus home-location and staypoint tables in `details`.
 data using fixed acceleration thresholds. Its details include five-minute
 interval, state-balance, region, and diagnostic tables.
 
+### Activity
+
+`compute_activity_markers` summarizes the labels in a separate 10 Hz activity
+stream. Daily markers include time in each observed activity, activity bouts,
+transitions, entropy, and time-of-day distributions; participant markers
+summarize the daily values.
+
 ## Preparing participant data
 
 The `compute_*_markers` functions accept a `ParticipantData` instance and
@@ -36,7 +43,8 @@ return a `MarkerResult`. Prepare one DataFrame for each sensor stream and use
 the canonical column names below. Sensor timestamps must be parseable as
 datetimes. Exertion requires the motion timestamp and, when heart rate is
 provided, the heart-rate timestamp to have a Pandas datetime dtype. Gait and
-routine require a datetime motion timestamp.
+routine require a datetime motion timestamp. Activity requires a separate
+activity DataFrame with datetime `timestamp` and `activity` columns.
 
 The package uses Pandas readers, so inputs can come from CSV or Parquet. This
 CSV example assumes timestamps have no timezone or UTC offset and already
@@ -55,12 +63,16 @@ heart_rate["timestamp"] = pd.to_datetime(heart_rate["timestamp"])
 location = pd.read_csv("location.csv")
 location["timestamp"] = pd.to_datetime(location["timestamp"])
 
+activity = pd.read_csv("activity.csv")
+activity["timestamp"] = pd.to_datetime(activity["timestamp"])
+
 participant = ParticipantData(
     participant_id="P001",
     timezone="America/Los_Angeles",
     motion=motion,
     heart_rate=heart_rate,
     location=location,
+    activity=activity,
 )
 ```
 
@@ -79,13 +91,15 @@ Use these column names:
 | `motion` | `timestamp`, `acceleration_x`, `acceleration_y`, `acceleration_z` | `rotation_rate_x`, `rotation_rate_y`, `rotation_rate_z`; routine can also use `latitude`, `longitude` |
 | `heart_rate` | `timestamp`, `heart_rate` | None |
 | `location` | `timestamp`, `latitude`, `longitude` | None |
+| `activity` | `timestamp`, `activity` | None |
 
 `ParticipantData` automatically canonicalizes sensor column names when it is
 created. For example, `stamp` is accepted as `timestamp`, and
 `user_acceleration_x`, `user_acceleration_y`, and `user_acceleration_z` are
 accepted as the corresponding `acceleration_x`, `acceleration_y`, and
-`acceleration_z` columns. The input DataFrames are copied during this
-normalization; the original frames are unchanged.
+`acceleration_z` columns. Activity labels must be supplied in the `activity`
+column. The input DataFrames are copied during this normalization; the original
+frames are unchanged.
 
 Use numeric values for sensor measurements. Exertion requires all three
 rotation-rate columns. Gait can run without rotation-rate columns; when
@@ -127,14 +141,18 @@ The current marker functions do not apply one common local-time conversion:
 - Routine converts timezone-aware motion and location timestamps to
   `ParticipantData.timezone`, or UTC when `timezone` is omitted. Naive
   timestamps are left unchanged and treated as local clock values.
+- Activity converts timezone-aware activity timestamps to
+  `ParticipantData.timezone`, or UTC when `timezone` is omitted. Naive
+  timestamps are left unchanged and treated as local clock values.
 - Exertion, gait, and location do not use `ParticipantData.timezone` to
   convert inputs. Their daily grouping follows the timestamps as processed by
   each implementation; timezone-aware inputs may therefore not align with
   routine's local-day grouping.
 
-Set `ParticipantData.timezone` for routine and ensure that motion and
-heart-rate timestamps use compatible conventions for exertion. If local-day
-alignment across all four marker families is essential, convert the streams
+Set `ParticipantData.timezone` for routine and activity and ensure that motion,
+activity, and heart-rate timestamps use compatible conventions for their
+respective marker functions. If local-day alignment across all marker families
+is essential, convert the streams
 consistently before calling them and validate results around midnight and
 daylight-saving transitions. Converting timezone-aware values to local time and
 then removing timezone information can align ordinary local-day boundaries, but
@@ -153,19 +171,24 @@ from digital_markers.exertion import compute_exertion_markers
 from digital_markers.gait import compute_gait_markers
 from digital_markers.location import compute_location_markers
 from digital_markers.routine import compute_routine_markers
+from digital_markers.activity import compute_activity_markers
 
 exertion = compute_exertion_markers(participant)
 gait = compute_gait_markers(participant)
 location_result = compute_location_markers(participant)
 routine = compute_routine_markers(participant)
+activity = compute_activity_markers(participant)
 ```
 
 Exertion requires `motion`; `heart_rate` is optional and can be omitted from
 `ParticipantData` or set to `None`. Gait and routine require `motion`.
 Location requires `location`; `motion` is optional and contributes timestamps
 to its recorded-time calculations. Routine can use location data but does not
-require it. Location and routine currently take no marker-specific keyword
-arguments; routine configuration uses fixed thresholds.
+require it. Activity requires the separate `activity` stream with `timestamp`
+and `activity` columns; it does not require motion, acceleration, or other
+sensor measurements. Its sampling assumption is 10 Hz. Location and routine
+currently take no marker-specific keyword arguments; routine configuration
+uses fixed thresholds.
 
 ### Optional exertion arguments
 
@@ -214,6 +237,14 @@ rate and study protocol:
 | `max_interval_cv` | `0.4` | Maximum coefficient of variation for step intervals. |
 | `prominence_scale` | `0.5` | Scale factor used for step-peak prominence detection. |
 
+### Optional activity arguments
+
+Activity markers use the distinct non-missing labels found in the participant's
+data. Missing or unlabeled samples are reported as `unknown` coverage and are
+excluded from activity-state fractions. `include_hourly=True` adds a
+per-state fraction for each clock hour to the daily table; it is `False` by
+default.
+
 
 ## Reading results
 
@@ -226,6 +257,7 @@ print(exertion.daily.head())    # one row per day, when provided by the marker
 print(gait.daily[["date", "num_steps", "num_walking_bouts"]])
 print(location_result.details["home_locations"])
 print(routine.details["state_balance"])
+print(activity.daily.head())
 
 for name, table in routine.details.items():
     print(name, table.shape)
@@ -251,6 +283,10 @@ participant-level movement summaries, with `details["home_locations"]` and
 `details["staypoints"]` for home and staypoint tables. Routine includes
 `details["intervals"]`, `details["state_balance"]`, `details["regions"]`,
 `details["motion_diagnostics"]`, and `details["location_diagnostics"]`.
+Activity daily tables contain observed seconds, unknown-label fraction, state
+fractions and bout summaries, transitions, entropy, and time-of-day fractions
+and shares. Its participant summaries include means, standard deviations,
+calendar-day slopes, and lag-one correlations across daily values.
 
 Missing values are meaningful: a value may be unavailable because the stream
 was not supplied or there were too few valid observations. In particular,
