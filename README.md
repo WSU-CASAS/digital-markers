@@ -201,12 +201,14 @@ from digital_markers.gait import compute_gait_markers
 from digital_markers.location import compute_location_markers
 from digital_markers.routine import compute_routine_markers
 from digital_markers.activity import compute_activity_markers
+from digital_markers import compute_audio_markers
 
 exertion = compute_exertion_markers(participant)
 gait = compute_gait_markers(participant)
 location_result = compute_location_markers(participant)
 routine = compute_routine_markers(participant)
 activity = compute_activity_markers(participant)
+audio_result = compute_audio_markers(participant)
 ```
 
 Exertion requires `motion`; `heart_rate` is optional and can be omitted from
@@ -219,21 +221,23 @@ sensor measurements. Its sampling assumption is 10 Hz. Location and routine
 currently take no marker-specific keyword arguments; routine configuration
 uses fixed thresholds.
 
-### Audio
+### Optional audio arguments
 
 Install the optional audio dependencies with `pip install digital-markers[audio]`.
-Compute markers with Whisper's automatic language detection and device selection
-by default:
+`compute_audio_markers` uses Whisper's automatic language detection and device
+selection by default. Audio computation does not write files as a side effect.
 
-```python
-from digital_markers import compute_audio_markers
-
-audio_result = compute_audio_markers(participant, language="auto", device="auto")
-```
-
-The function also accepts `model`, `beam_size`, and `min_words`. Set
-`include_behavior=True` and/or `include_health=True` to include those marker
-columns. Audio computation does not write files as a side effect.
+| Argument | Default | Purpose |
+|---|---:|---|
+| `language` | `"auto"` | Whisper language code, or `"auto"` to detect the language. |
+| `model` | `"large-v3"` | Faster-Whisper model name. |
+| `device` | `"auto"` | Inference device: `"auto"`, `"cpu"`, or `"cuda"`. |
+| `beam_size` | `5` | Whisper beam size. |
+| `min_words` | `8` | Minimum transcript word count for informative text markers. |
+| `include_behavior` | `False` | Include behavior marker columns. |
+| `include_health` | `False` | Include health marker columns. |
+| `text_patterns` | `None` | Language-specific regular expressions for activity, health, and specificity markers. |
+| `syntax_models` | `None` | Mapping of language codes to spaCy model names for syntax markers. |
 
 English activity, specificity, and health patterns are built in. To add or
 customize pattern-based markers for another language, pass `text_patterns`
@@ -281,7 +285,10 @@ audio_result = compute_audio_markers(
 
 Additional syntax languages can be configured with spaCy model names, for
 example `syntax_models={"es": "es_core_news_sm", "fr": "your_french_model"}`.
-English syntax and sentiment use `en_core_web_sm` and TextBlob when installed;
+Syntax models are loaded only when a transcript in that language has enough
+words for syntax analysis. English syntax uses `en_core_web_sm`; to install it,
+run `python -m spacy download en_core_web_sm`. The Spanish model is only checked
+when Spanish syntax analysis is needed. TextBlob provides English sentiment;
 multilingual sentiment and sentence embeddings are used for other languages.
 Missing optional models result in missing values for their corresponding
 features. ASR tokenization and lexical and speech-rate measures can vary by
@@ -338,9 +345,11 @@ rate and study protocol:
 
 Activity markers use the distinct non-missing labels found in the participant's
 data. Missing or unlabeled samples are reported as `unknown` coverage and are
-excluded from activity-state fractions. `include_hourly=True` adds a
-per-state fraction for each clock hour to the daily table; it is `False` by
-default.
+excluded from activity-state fractions.
+
+| Argument | Default | Purpose |
+|---|---:|---|
+| `include_hourly` | `False` | Add a per-state fraction for each clock hour to the daily table. |
 
 
 ## Reading results

@@ -126,6 +126,9 @@ def test_text_features_support_english_behavior_health_and_custom_language_patte
             self.embedder = Embedder()
             self.parsers = {}
 
+        def parser(self, language):
+            return self.parsers.get(language)
+
         def sentiment(self, _text, _language):
             return 0.25
 
@@ -186,6 +189,35 @@ def test_text_features_support_english_behavior_health_and_custom_language_patte
     assert other_language["specificity"] == 1.0
     assert pd.isna(other_language["difficulty"])
     assert pd.isna(other_language["community"])
+
+
+def test_text_models_load_syntax_parsers_lazily(monkeypatch):
+    loaded_models = []
+
+    def load_spacy_model(model_name):
+        loaded_models.append(model_name)
+        if model_name == "es_core_news_sm":
+            raise OSError("model not installed")
+        return object()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sentence_transformers",
+        SimpleNamespace(SentenceTransformer=lambda _name: object()),
+    )
+    monkeypatch.setitem(sys.modules, "spacy", SimpleNamespace(load=load_spacy_model))
+    monkeypatch.setitem(sys.modules, "textblob", SimpleNamespace(TextBlob=object))
+
+    models = audio_markers._TextModels()
+
+    assert loaded_models == []
+    assert models.parser("en") is not None
+    assert loaded_models == ["en_core_web_sm"]
+    with pytest.warns(UserWarning, match="es_core_news_sm"):
+        assert models.parser("es") is None
+    assert loaded_models == ["en_core_web_sm", "es_core_news_sm"]
+    assert models.parser("es") is None
+    assert loaded_models == ["en_core_web_sm", "es_core_news_sm"]
 
 
 def test_text_pattern_validation_rejects_invalid_regular_expressions():

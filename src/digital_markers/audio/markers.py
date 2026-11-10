@@ -321,6 +321,9 @@ class _TextModels:
     def __init__(self, syntax_models: Mapping[str, str] | None = None) -> None:
         self.embedder: object | None = None
         self.parsers: dict[str, object] = {}
+        self.parser_names = {"en": "en_core_web_sm", "es": "es_core_news_sm"}
+        self.parser_names.update(syntax_models or {})
+        self.parser_load_attempted: set[str] = set()
         self.english_sentiment: object | None = None
         self.multilingual_sentiment: object | None = None
         from sentence_transformers import SentenceTransformer
@@ -329,26 +332,36 @@ class _TextModels:
             "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
         )
         try:
-            import spacy
-        except ImportError:
-            warnings.warn("spaCy unavailable; syntax-complexity markers will be missing")
-        else:
-            parser_names = {"en": "en_core_web_sm", "es": "es_core_news_sm"}
-            parser_names.update(syntax_models or {})
-            for language, model_name in parser_names.items():
-                try:
-                    self.parsers[language] = spacy.load(model_name)
-                except OSError:
-                    warnings.warn(
-                        f"spaCy model {model_name!r} unavailable; syntax complexity "
-                        f"will be missing for {language!r}"
-                    )
-        try:
             from textblob import TextBlob
         except ImportError:
             warnings.warn("TextBlob unavailable; English sentiment markers will be missing")
         else:
             self.english_sentiment = TextBlob
+
+    def parser(self, language: str) -> object | None:
+        if language in self.parsers:
+            return self.parsers[language]
+        model_name = self.parser_names.get(language)
+        if model_name is None or language in self.parser_load_attempted:
+            return None
+        self.parser_load_attempted.add(language)
+        try:
+            import spacy
+        except ImportError:
+            warnings.warn(
+                f"spaCy unavailable; syntax complexity will be missing for {language!r}"
+            )
+            return None
+        try:
+            parser = spacy.load(model_name)
+        except OSError:
+            warnings.warn(
+                f"spaCy model {model_name!r} unavailable; syntax complexity "
+                f"will be missing for {language!r}"
+            )
+            return None
+        self.parsers[language] = parser
+        return parser
 
     def sentiment(self, text: str, language: str) -> float:
         if language == "en" and self.english_sentiment is not None:
@@ -447,7 +460,7 @@ def _text_features(
         except ImportError:
             warnings.warn("wordfreq unavailable; lexical-sophistication markers will be missing")
         else:
-            parser = models.parsers.get(language)
+            parser = models.parser(language)
             stop_words = parser.Defaults.stop_words if parser is not None else set()
             content_words = [word for word in words if word not in stop_words and len(word) > 2]
             if len(content_words) >= 4:
@@ -456,7 +469,7 @@ def _text_features(
                     np.mean([7 - min(7, max(0, frequency)) for frequency in frequencies])
                 )
     sentences = [sentence.strip() for sentence in SENTENCE_PATTERN.split(text) if sentence.strip()]
-    parser = models.parsers.get(language)
+    parser = models.parser(language) if count >= 6 else None
     if parser is not None and count >= 6:
         doc = parser(text[: parser.max_length])
         parsed_sentences = [sentence for sentence in doc.sents if sentence.text.strip()]
