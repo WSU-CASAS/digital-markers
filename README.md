@@ -3,7 +3,7 @@
 `digital-markers` is an open-source Python library from the CASAS Lab at
 Washington State University. The package computes marker families from
 wearable sensor data: exertion, gait, location, and behavioral routine.
-Activity-label markers are also available.
+Activity-label and audio markers are also available.
 
 ## Supported markers
 
@@ -35,6 +35,12 @@ interval, state-balance, region, and diagnostic tables.
 stream. Daily markers include time in each observed activity, activity bouts,
 transitions, entropy, and time-of-day distributions; participant markers
 summarize the daily values.
+
+### Audio
+
+`compute_audio_markers` derives acoustic, transcript, and optional behavior and
+health markers from a participant's audio recordings. See the audio-specific
+input, usage, language configuration, and result guidance below.
 
 ## Preparing participant data
 
@@ -109,6 +115,29 @@ longitude columns, but their values may be missing on rows without a GPS fix.
 Keep those rows and their timestamps: location uses them to estimate observed
 recording time. Routine uses `location` coordinates when supplied, or motion
 coordinates when present. Its motion input is expected at 10 Hz.
+
+### Audio
+
+Audio recordings are attached to `ParticipantData.audio` as
+`AudioRecording` instances. To load files, use `read_audio_directory`, which
+scans only files directly inside the specified directory and retains their
+original filenames:
+
+```python
+from digital_markers import AudioRecording, ParticipantData, read_audio_directory
+
+recordings = read_audio_directory("recordings/P001")
+participant = ParticipantData(participant_id="P001", audio=recordings)
+```
+
+Alternatively, pass in-memory mono or `(samples, channels)` audio. Supply the
+sample rate in Hz. Integer PCM is normalized automatically; floating-point
+samples should already be normalized to [-1, 1].
+
+```python
+recording = AudioRecording("journal.wav", samples=audio, sample_rate_hz=16000)
+participant = ParticipantData(participant_id="P001", audio=[recording])
+```
 
 ### Timestamp and local-time guidance
 
@@ -189,6 +218,74 @@ and `activity` columns; it does not require motion, acceleration, or other
 sensor measurements. Its sampling assumption is 10 Hz. Location and routine
 currently take no marker-specific keyword arguments; routine configuration
 uses fixed thresholds.
+
+### Audio
+
+Install the optional audio dependencies with `pip install digital-markers[audio]`.
+Compute markers with Whisper's automatic language detection and device selection
+by default:
+
+```python
+from digital_markers import compute_audio_markers
+
+audio_result = compute_audio_markers(participant, language="auto", device="auto")
+```
+
+The function also accepts `model`, `beam_size`, and `min_words`. Set
+`include_behavior=True` and/or `include_health=True` to include those marker
+columns. Audio computation does not write files as a side effect.
+
+English activity, specificity, and health patterns are built in. To add or
+customize pattern-based markers for another language, pass `text_patterns`
+keyed by the detected Whisper language code. Pattern matching is
+case-insensitive; provide regular expressions for the categories that should
+be measured. `activities` accepts `food`, `housework`, `maintenance`,
+`errands`, `appointments`, `outings`, `social`, `physical`, and `cognitive`.
+`health` accepts `difficulty`, `memory`, `physical_limit`, `assistance`, and
+`compensation`. `temporal` and `detail` patterns are used for specificity.
+Unspecified categories remain missing (`NaN`), rather than being inferred.
+For example:
+
+```python
+patterns = {
+    "es": {
+        "activities": {
+            "food": r"\bcocinar\b",
+            "housework": r"\blimpiar\b",
+            "maintenance": r"\breparar\b",
+            "errands": r"\bcompras\b",
+            "appointments": r"\bcita médica\b",
+            "outings": r"\bpaseo\b",
+            "social": r"\bfamilia\b",
+            "physical": r"\bcaminar\b",
+            "cognitive": r"\bleer\b",
+        },
+        "health": {
+            "difficulty": r"\bno pude\b",
+            "memory": r"\bolvidé\b",
+            "physical_limit": r"\bcansado\b",
+            "assistance": r"\bnecesité ayuda\b",
+            "compensation": r"\brecordatorio\b",
+        },
+        "temporal": r"\bayer\b",
+        "detail": r"\bparque\b",
+    }
+}
+audio_result = compute_audio_markers(
+    participant,
+    include_behavior=True,
+    include_health=True,
+    text_patterns=patterns,
+)
+```
+
+Additional syntax languages can be configured with spaCy model names, for
+example `syntax_models={"es": "es_core_news_sm", "fr": "your_french_model"}`.
+English syntax and sentiment use `en_core_web_sm` and TextBlob when installed;
+multilingual sentiment and sentence embeddings are used for other languages.
+Missing optional models result in missing values for their corresponding
+features. ASR tokenization and lexical and speech-rate measures can vary by
+language, so compare those measurements within a language.
 
 ### Optional exertion arguments
 
@@ -297,10 +394,31 @@ fixes or no recorded minutes. Check the relevant counts and detail tables
 instead of replacing missing values with zero.
 
 
+### Audio
+
+The audio `MarkerResult.markers` table contains participant-level marker
+summaries. `details["recordings"]` contains per-recording measurements and
+transcript text. Use `write_audio_transcripts` to save those transcripts; by
+default it writes `<original-stem>-transcript.txt`, and `suffix=""` writes
+`<original-stem>.txt` instead:
+
+```python
+from digital_markers import write_audio_transcripts
+
+write_audio_transcripts(audio_result, "transcripts", suffix="")
+```
+
+
 ## Installation
 
 ```bash
 python -m pip install digital-markers
+```
+
+For audio markers:
+
+```bash
+python -m pip install "digital-markers[audio]"
 ```
 
 For development:

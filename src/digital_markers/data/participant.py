@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 
+from digital_markers.data.audio import AudioRecording
 from digital_markers.data.validation import canonicalize_columns
 
 
@@ -19,6 +20,7 @@ class ParticipantData:
     heart_rate: pd.DataFrame | None = None
     location: pd.DataFrame | None = None
     activity: pd.DataFrame | None = None
+    audio: list[AudioRecording] | None = None
 
     def __post_init__(self) -> None:
         if self.motion is not None:

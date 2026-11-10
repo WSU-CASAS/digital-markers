@@ -13,6 +13,17 @@ authors = [{ name = "WSU CASAS Lab" }]
 dependencies = ["numpy", "pandas", "scipy"]
 
 [project.optional-dependencies]
+audio = [
+    "faster-whisper",
+    "librosa",
+    "praat-parselmouth",
+    "sentence-transformers",
+    "spacy",
+    "textblob",
+    "torch",
+    "transformers",
+    "wordfreq",
+]
 dev = ["pytest", "pytest-cov", "ruff", "build"]
 
 [project.urls]

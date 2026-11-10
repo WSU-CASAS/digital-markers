@@ -15,6 +15,7 @@ def test_participant_data():
 
 
 def test_supported_marker_imports():
+    from digital_markers.audio import compute_audio_markers
     from digital_markers.exertion import compute_exertion_markers
     from digital_markers.gait import compute_gait_markers
     from digital_markers.location import compute_location_markers
@@ -24,6 +25,7 @@ def test_supported_marker_imports():
         callable(marker)
         for marker in (
             compute_exertion_markers,
+            compute_audio_markers,
             compute_gait_markers,
             compute_location_markers,
             compute_routine_markers,
